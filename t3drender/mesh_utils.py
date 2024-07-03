@@ -1,12 +1,13 @@
-import warnings
-from typing import List, Optional, Union
-from packaging import version
 import cv2
 import numpy as np
 import trimesh
 import open3d
-from pytorch3d.io.obj_io import save_obj, load_objs_as_meshes
 import torch
+import warnings
+from typing import List, Optional, Union
+from packaging import version
+from pytorch3d.io import IO
+from pytorch3d.io.obj_io import save_obj, load_objs_as_meshes
 from pytorch3d.renderer.mesh.textures import TexturesUV, TexturesVertex
 from pytorch3d.structures import (Meshes, Pointclouds, join_meshes_as_scene, join_meshes_as_batch,
                                   list_to_padded, padded_to_list)
@@ -14,6 +15,66 @@ from pytorch3d.transforms import Rotate
 
 from pytorch3d.utils.ico_sphere import ico_sphere
 from pytorch3d.renderer.mesh import TexturesVertex
+
+
+
+def save_meshes_as_plys(files: Union[str, List[str]],
+                        meshes: Optional[Meshes] = None) -> None:
+    """Save meshes as .ply files. Mainly for vertex color meshes.
+
+    Args:
+        files (List[str]): Output .ply file list.
+        meshes (Meshes, optional): higher priority than
+            (verts & faces & verts_rgb). Defaults to None.
+        verts (torch.Tensor, optional): lower priority than meshes.
+            Defaults to None.
+        faces (torch.Tensor, optional): lower priority than meshes.
+            Defaults to None.
+        verts_rgb (torch.Tensor, optional): lower priority than meshes.
+            Defaults to None.
+    """
+    assert files is not None
+    if not isinstance(files, list):
+        files = [files]
+    assert len(files) >= len(meshes), 'Not enough output files.'
+    writer = IO()
+    for idx in range(len(meshes)):
+        assert files[idx].endswith('.ply'), 'Please save as .ply files.'
+        writer.save_mesh(
+            meshes[idx], files[idx], colors_as_uint8=True, binary=False)
+
+
+def save_meshes_as_objs(files: Union[str, List[str]], meshes: Meshes = None) -> None:
+    """Save meshes as .obj files. Pytorch3D will not save vertex color for.
+
+    .obj, please use `save_meshes_as_plys`.
+
+    Args:
+        files (List[str]): Output .obj file list.
+        meshes (Meshes, optional):
+            Defaults to None.
+    """
+    if not isinstance(files, list):
+        files = [files]
+
+    assert len(files) >= len(meshes), 'Not enough output files.'
+
+    for idx in range(len(meshes)):
+        if isinstance(meshes.textures, TexturesUV):
+            verts_uvs = meshes.textures.verts_uvs_padded()[idx]
+            faces_uvs = meshes.textures.faces_uvs_padded()[idx]
+            texture_map = meshes.textures.maps_padded()[idx]
+        else:
+            verts_uvs = None
+            faces_uvs = None
+            texture_map = None
+        save_obj(
+            f=files[idx],
+            verts=meshes.verts_padded()[idx],
+            faces=meshes.faces_padded()[idx],
+            verts_uvs=verts_uvs,
+            faces_uvs=faces_uvs,
+            texture_map=texture_map)
 
 
 def join_batch_meshes_as_scene(
