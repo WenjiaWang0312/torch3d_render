@@ -1,11 +1,9 @@
-from typing import Iterable, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 from pytorch3d.structures import Meshes
 from t3drender.cameras import NewCamerasBase
 from .base_renderer import BaseRenderer
-
-from .utils import normalize
 
 
 class SegmentationRenderer(BaseRenderer):
@@ -15,9 +13,6 @@ class SegmentationRenderer(BaseRenderer):
     def __init__(self,
                  resolution: Tuple[int, int] = None,
                  device: Union[torch.device, str] = 'cpu',
-                 output_path: Optional[str] = None,
-                 out_img_format: str = '%06d.png',
-                 num_class: int = 1,
                  palette: torch.Tensor = None,
                  **kwargs) -> None:
         """Render vertex-color mesh into a segmentation map of a (B, H, W)
@@ -36,12 +31,6 @@ class SegmentationRenderer(BaseRenderer):
             device (Union[torch.device, str], optional):
                 You can pass a str or torch.device for cpu or gpu render.
                 Defaults to 'cpu'.
-            output_path (Optional[str], optional):
-                Output path of the video or images to be saved.
-                Defaults to None.
-            out_img_format (str, optional): The image format string for
-                saving the images.
-                Defaults to '%06d.png'.
             num_class (int, optional): number of segmentation parts.
                 Defaults to 1.
 
@@ -50,17 +39,12 @@ class SegmentationRenderer(BaseRenderer):
         """
         super().__init__(resolution=resolution,
                          device=device,
-                         output_path=output_path,
-                         obj_path=None,
-                         out_img_format=out_img_format,
                          **kwargs)
         self.palette = palette
 
     def forward(self,
                 meshes: Meshes,
                 cameras: Optional[NewCamerasBase] = None,
-                indexes: Optional[Iterable[int]] = None,
-                backgrounds: Optional[torch.Tensor] = None,
                 **kwargs):
         """Render segmentation map.
 
@@ -86,21 +70,4 @@ class SegmentationRenderer(BaseRenderer):
                                        meshes=meshes,
                                        cameras=cameras)
 
-        if self.output_path is not None:
-            rgba = self.tensor2rgba(segmentation_map)
-            if self.output_path is not None:
-                self._write_images(rgba, backgrounds, indexes)
-
         return segmentation_map
-
-    def tensor2rgba(self, tensor: torch.Tensor):
-        valid_masks = (tensor[..., :] > 0) * 1.0
-        color = torch.Tensor(self.palette)
-        color = torch.cat([torch.zeros(1, 3), color]).to(self.device)
-        B, H, W, _ = tensor.shape
-        rgbs = color[tensor.view(-1).long()].view(B, H, W, 3) * valid_masks
-        rgbs = normalize(rgbs.float(),
-                         origin_value_range=(0, 255),
-                         out_value_range=(0, 1))
-        rgba = torch.cat([rgbs, valid_masks], -1)
-        return rgba

@@ -15,8 +15,6 @@ class MeshRenderer(BaseRenderer):
         self,
         resolution: Tuple[int, int] = None,
         device: Union[torch.device, str] = 'cpu',
-        output_path: Optional[str] = None,
-        out_img_format: str = '%06d.png',
         **kwargs,
     ) -> None:
         """Renderer for RGBA image of meshes.
@@ -27,25 +25,15 @@ class MeshRenderer(BaseRenderer):
             device (Union[torch.device, str], optional):
                 You can pass a str or torch.device for cpu or gpu render.
                 Defaults to 'cpu'.
-            output_path (Optional[str], optional):
-                Output path of the video or images to be saved.
-                Defaults to None.
-            out_img_format (str, optional): The image format string for
-                saving the images.
-                Defaults to '%06d.png'.
         """
         super().__init__(resolution=resolution,
                          device=device,
-                         output_path=output_path,
-                         out_img_format=out_img_format,
                          **kwargs)
 
     def forward(self,
                 meshes: Meshes,
                 cameras: Optional[NewCamerasBase] = None,
                 lights: Optional[BaseLights] = None,
-                indexes: Optional[Iterable[int]] = None,
-                backgrounds: Optional[torch.Tensor] = None,
                 **kwargs) -> Union[torch.Tensor, None]:
         """Render Meshes.
 
@@ -54,10 +42,6 @@ class MeshRenderer(BaseRenderer):
             cameras (Optional[NewCamerasBase], optional): cameras for render.
                 Defaults to None.
             lights (Optional[BaseLights], optional): lights for render.
-                Defaults to None.
-            indexes (Optional[Iterable[int]], optional): indexes for images.
-                Defaults to None.
-            backgrounds (Optional[torch.Tensor], optional): background images.
                 Defaults to None.
 
         Returns:
@@ -74,7 +58,4 @@ class MeshRenderer(BaseRenderer):
             cameras=cameras,
             lights=self.lights if lights is None else lights)
 
-        if self.output_path is not None:
-            rgba = self.tensor2rgba(rendered_images)
-            self._write_images(rgba, backgrounds, indexes)
         return rendered_images

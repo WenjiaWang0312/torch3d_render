@@ -1,6 +1,6 @@
 import math
 import os
-from typing import Optional, Union
+from typing import Union
 
 import numpy as np
 import torch
@@ -18,13 +18,11 @@ osj = os.path.join
 
 def render(renderer: Union[nn.Module, dict],
            meshes: Union[Meshes, None] = None,
-           output_path: Optional[str] = None,
            device: Union[str, torch.device] = 'cpu',
            cameras: Union[NewCamerasBase, CamerasBase, dict, None] = None,
            lights: Union[BaseLights, dict, None] = None,
            batch_size: int = 5,
-           return_tensor: bool = False,
-           no_grad: bool = False,
+           no_grad: bool = True,
            verbose: bool = True,
            **forward_params):
     
@@ -34,8 +32,6 @@ def render(renderer: Union[nn.Module, dict],
         raise TypeError('Wrong input renderer type.')
 
     renderer = renderer.to(device)
-    if output_path is not None:
-        renderer._set_output_path(output_path)
 
     if isinstance(cameras, NewCamerasBase):
         cameras = cameras
@@ -82,13 +78,10 @@ def render(renderer: Union[nn.Module, dict],
 
         else:
             images_batch = renderer(indexes=indexes, **foward_params_batch)
-        if return_tensor:
-            tensors.append(images_batch)
+        tensors.append(images_batch)
 
-    renderer.export()
-    if return_tensor:
-        if isinstance(tensors[0], torch.Tensor):
-            tensors = torch.cat(tensors)
-        else:
-            tensors = np.concatenate(tensors)
-        return tensors
+    if isinstance(tensors[0], torch.Tensor):
+        tensors = torch.cat(tensors)
+    else:
+        tensors = np.concatenate(tensors)
+    return tensors

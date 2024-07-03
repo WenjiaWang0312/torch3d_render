@@ -5,7 +5,6 @@ from pytorch3d.structures import Meshes
 from t3drender.cameras.cameras import NewCamerasBase
 from .base_renderer import BaseRenderer
 
-from .utils import normalize, rgb2bgr
 
 
 class NormalRenderer(BaseRenderer):
@@ -16,8 +15,6 @@ class NormalRenderer(BaseRenderer):
         self,
         resolution: Iterable[int] = None,
         device: Union[torch.device, str] = 'cpu',
-        output_path: Optional[str] = None,
-        out_img_format: str = '%06d.png',
         **kwargs,
     ) -> None:
         """Renderer for normal map of meshes.
@@ -28,28 +25,17 @@ class NormalRenderer(BaseRenderer):
             device (Union[torch.device, str], optional):
                 You can pass a str or torch.device for cpu or gpu render.
                 Defaults to 'cpu'.
-            output_path (Optional[str], optional):
-                Output path of the video or images to be saved.
-                Defaults to None.
-            out_img_format (str, optional): The image format string for
-                saving the images.
-                Defaults to '%06d.png'.
 
         Returns:
             None
         """
         super().__init__(resolution=resolution,
                          device=device,
-                         output_path=output_path,
-                         obj_path=None,
-                         out_img_format=out_img_format,
                          **kwargs)
 
     def forward(self,
                 meshes: Optional[Meshes] = None,
                 cameras: Optional[NewCamerasBase] = None,
-                indexes: Optional[Iterable[int]] = None,
-                backgrounds: Optional[torch.Tensor] = None,
                 **kwargs):
         """Render Meshes.
 
@@ -57,11 +43,6 @@ class NormalRenderer(BaseRenderer):
             meshes (Optional[Meshes], optional): meshes to be rendered.
                 Defaults to None.
             cameras (Optional[NewCamerasBase], optional): cameras for render.
-                Defaults to None.
-            indexes (Optional[Iterable[int]], optional): indexes for the
-                images.
-                Defaults to None.
-            backgrounds (Optional[torch.Tensor], optional): background images.
                 Defaults to None.
 
         Returns:
@@ -75,19 +56,7 @@ class NormalRenderer(BaseRenderer):
                                  meshes=meshes,
                                  cameras=cameras)
 
-        if self.output_path is not None:
-            rgba = self.tensor2rgba(normal_map)
-            self._write_images(rgba, backgrounds, indexes)
-
         return normal_map
-
-    def tensor2rgba(self, tensor: torch.Tensor):
-        rgbs, valid_masks = tensor[..., :3], (tensor[..., 3:] > 0) * 1.0
-        rgbs = normalize(rgbs,
-                         origin_value_range=(-1, 1),
-                         out_value_range=(0, 1))
-        rgbs = rgb2bgr(rgbs)
-        return torch.cat([rgbs, valid_masks], -1)
 
 
 class PolarNoramlRenderer(NormalRenderer):

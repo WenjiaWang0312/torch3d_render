@@ -19,8 +19,6 @@ class PointCloudRenderer(BaseRenderer):
     def __init__(self,
                  resolution: Tuple[int, int] = None,
                  device: Union[torch.device, str] = 'cpu',
-                 output_path: Optional[str] = None,
-                 out_img_format: str = '%06d.png',
                  radius: Optional[float] = None,
                  **kwargs) -> None:
         """Point cloud renderer.
@@ -31,11 +29,6 @@ class PointCloudRenderer(BaseRenderer):
             device (Union[torch.device, str], optional):
                 You can pass a str or torch.device for cpu or gpu render.
                 Defaults to 'cpu'.
-            output_path (Optional[str], optional):
-                Output path of the video or images to be saved.
-                Defaults to None.
-            out_img_format (str, optional): name format for temp images.
-                Defaults to '%06d.png'.
             radius (float, optional): radius of points. Defaults to None.
 
         Returns:
@@ -44,8 +37,6 @@ class PointCloudRenderer(BaseRenderer):
         self.radius = radius
         super().__init__(resolution=resolution,
                          device=device,
-                         output_path=output_path,
-                         out_img_format=out_img_format,
                          **kwargs)
 
     def to(self, device):
@@ -96,10 +87,7 @@ class PointCloudRenderer(BaseRenderer):
         pointclouds: Optional[Pointclouds] = None,
         vertices: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None,
         verts_rgba: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None,
-        meshes: Meshes = None,
         cameras: Optional[NewCamerasBase] = None,
-        indexes: Optional[Iterable[int]] = None,
-        backgrounds: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[None, torch.Tensor]:
         """Render pointclouds.
@@ -113,11 +101,6 @@ class PointCloudRenderer(BaseRenderer):
                 optional): coordinate tensor of points. Defaults to None.
             verts_rgba (Optional[Union[torch.Tensor, List[torch.Tensor]]],
                 optional): color tensor of points. Defaults to None.
-            indexes (Optional[Iterable[int]], optional): indexes for the
-                images.
-                Defaults to None.
-            backgrounds (Optional[torch.Tensor], optional): background images.
-                Defaults to None.
 
         Returns:
             Union[None, torch.Tensor]: Return tensor or None.
@@ -149,10 +132,5 @@ class PointCloudRenderer(BaseRenderer):
             **kwargs,
         )
         rendered_images = rendered_images.permute(0, 2, 3, 1)
-
-        if self.output_path is not None:
-            rgba = self.tensor2rgba(rendered_images)
-            if self.output_path is not None:
-                self.write_images(rgba, backgrounds, indexes)
 
         return rendered_images

@@ -1,4 +1,4 @@
-from typing import Iterable, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 from pytorch3d.structures import Meshes
@@ -15,8 +15,6 @@ class SilhouetteRenderer(BaseRenderer):
         self,
         resolution: Tuple[int, int] = None,
         device: Union[torch.device, str] = 'cpu',
-        output_path: Optional[str] = None,
-        out_img_format: str = '%06d.png',
         **kwargs,
     ) -> None:
         """SilhouetteRenderer for neural rendering and visualization.
@@ -27,27 +25,17 @@ class SilhouetteRenderer(BaseRenderer):
             device (Union[torch.device, str], optional):
                 You can pass a str or torch.device for cpu or gpu render.
                 Defaults to 'cpu'.
-            output_path (Optional[str], optional):
-                Output path of the video or images to be saved.
-                Defaults to None.
-            out_img_format (str, optional): The image format string for
-                saving the images.
-                Defaults to '%06d.png'.
 
         Returns:
             None
         """
         super().__init__(resolution=resolution,
                          device=device,
-                         output_path=output_path,
-                         out_img_format=out_img_format,
                          **kwargs)
 
     def forward(self,
                 meshes: Optional[Meshes] = None,
                 cameras: Optional[NewCamerasBase] = None,
-                indexes: Iterable[str] = None,
-                backgrounds: Optional[torch.Tensor] = None,
                 **kwargs):
         """Render silhouette map.
 
@@ -57,10 +45,6 @@ class SilhouetteRenderer(BaseRenderer):
                 The color indicates the class index of the triangle.
                 Defaults to None.
             cameras (Optional[NewCamerasBase], optional): cameras for render.
-                Defaults to None.
-            indexes (Optional[Iterable[int]], optional): indexes for images.
-                Defaults to None.
-            backgrounds (Optional[torch.Tensor], optional): background images.
                 Defaults to None.
 
         Returns:
@@ -74,16 +58,4 @@ class SilhouetteRenderer(BaseRenderer):
                                      meshes=meshes,
                                      cameras=cameras)
 
-        if self.output_path is not None:
-            rgba = self.tensor2rgba(silhouette_map)
-            self._write_images(rgba, backgrounds, indexes)
-
         return silhouette_map
-
-    def tensor2rgba(self, tensor: torch.Tensor):
-        silhouette = tensor[..., 3:]
-        # 
-        valid_masks = (silhouette > 0) * 1.0
-        rgbs = valid_masks.repeat(1, 1, 1, 3)
-        # rgbs = normalize(rgbs, out_value_range=(0, 1))
-        return rgbs

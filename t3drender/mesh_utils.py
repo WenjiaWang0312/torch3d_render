@@ -1,6 +1,5 @@
 import warnings
 from typing import List, Optional, Union
-from mmhuman3d.utils.path_utils import prepare_output_path
 from packaging import version
 import cv2
 import numpy as np
@@ -9,19 +8,51 @@ import open3d
 from pytorch3d.io.obj_io import save_obj, load_objs_as_meshes
 import torch
 from pytorch3d.renderer.mesh.textures import TexturesUV, TexturesVertex
-from pytorch3d.structures import (Meshes, Pointclouds, join_meshes_as_scene,
-                                  list_to_padded)
+from pytorch3d.structures import (Meshes, Pointclouds, join_meshes_as_scene, join_meshes_as_batch,
+                                  list_to_padded, padded_to_list)
 from pytorch3d.transforms import Rotate
-from mmhuman3d.utils.mesh_utils import join_batch_meshes_as_scene, load_plys_as_meshes, load_objs_as_meshes, save_meshes_as_objs, save_meshes_as_plys
-from tqdm import trange
 
 from pytorch3d.utils.ico_sphere import ico_sphere
 from pytorch3d.renderer.mesh import TexturesVertex
-from avatar3d.utils.keypoint_utils import search_limbs
 
-from mmhuman3d.core.conventions.segmentation import body_segmentation
-from mmhuman3d.utils.demo_utils import get_different_colors
-from .cylindar import cylindar
+
+def join_batch_meshes_as_scene(
+    meshes: List[Meshes],
+    include_textures: bool = True,
+) -> Meshes:
+    """Join `meshes` as a scene each batch. Only for Pytorch3D `meshes`. The
+    Meshes must share the same batch size, and topology could be different.
+    They must all be on the same device. If `include_textures` is true, the
+    textures should be the same type, all be None is not accepted. If
+    `include_textures` is False, textures are ignored. The return meshes will
+    have no textures.
+
+    Args:
+        meshes (List[Meshes]): A `list` of `Meshes` with the same batches.
+            Required.
+        include_textures: (bool) whether to try to join the textures.
+
+    Returns:
+        New Meshes which has join different Meshes by each batch.
+    """
+    for mesh in meshes:
+        mesh._verts_list = padded_to_list(mesh.verts_padded(),
+                                          mesh.num_verts_per_mesh().tolist())
+    num_scene_size = len(meshes)
+    num_batch_size = len(meshes[0])
+    for i in range(num_scene_size):
+        assert len(
+            meshes[i]
+        ) == num_batch_size, 'Please make sure that the Meshes all have'
+        'the same batch size.'
+    meshes_all = []
+    for j in range(num_batch_size):
+        meshes_batch = []
+        for i in range(num_scene_size):
+            meshes_batch.append(meshes[i][j])
+        meshes_all.append(join_meshes_as_scene(meshes_batch, include_textures))
+    meshes_final = join_meshes_as_batch(meshes_all, include_textures)
+    return meshes_final
 
 
 def get_pointcloud_mesh(verts_padded, level=0, radius=0.01, colors=None):
@@ -50,95 +81,6 @@ def get_pointcloud_mesh(verts_padded, level=0, radius=0.01, colors=None):
     return meshes
 
 
-def get_cylinder(start, end, radius):
-
-    def norm_vec(vec):
-        return vec / torch.sqrt((vec * vec).sum())
-
-    device = start.device
-    mesh = Meshes(verts=torch.Tensor(cylindar['verts'])[None],
-                  faces=torch.Tensor(
-                      cylindar['faces'])[None].long()).to(device)
-    verts = mesh.verts_padded()
-    length = torch.sqrt(((end - start) * (end - start)).sum())
-    verts[..., :2] *= radius
-    verts[..., 2] = verts[..., 2] / 1.1336 / 2 * length
-    center = start / 2 + end / 2
-
-    z_vec = end - start
-    z_vec = z_vec.view(-1, 3)
-    z_vec = norm_vec(z_vec)
-    y_vec = torch.Tensor([0, 1, 0]).view(-1, 3).to(device)
-
-    y_vec = y_vec - torch.bmm(y_vec.view(-1, 1, 3), z_vec.view(-1, 3, 1)).view(
-        -1, 1) * z_vec
-    y_vec = norm_vec(y_vec)
-    x_vec = torch.cross(y_vec, z_vec)
-    R = torch.cat(
-        [x_vec.view(-1, 3, 1),
-         y_vec.view(-1, 3, 1),
-         z_vec.view(-1, 3, 1)], 1).view(-1, 3, 3)
-
-    R = R.permute(0, 2, 1)
-    n_verts = verts.shape[1]
-    verts = torch.bmm(R.repeat_interleave(n_verts, 0), verts.view(-1, 3, 1))
-    verts = verts.view(1, -1, 3)
-    verts = verts + center.view(1, 1, 3)
-    mesh = mesh.update_padded(verts)
-    mesh.textures = TexturesVertex(
-        torch.ones_like(verts) *
-        torch.Tensor([0.3, 0.3, 0.8]).view(1, 1, 3).to(device))
-    return mesh
-
-
-def get_joints_mesh(joints, level=0, radius=0.01, colors=None):
-    colors = torch.randint(0, 255, joints.shape).float()
-    colors = colors / 255.
-    pc_mesh = get_pointcloud_mesh(joints,
-                                  level=level,
-                                  radius=radius,
-                                  colors=colors)
-    limbs = search_limbs('smpl')[0]['body']
-    limbs_list = []
-    for limb in limbs:
-        start = joints[0, limb[0]]
-        end = joints[0, limb[1]]
-        limbs_list.append(get_cylinder(start, end, 0.05))
-    pc_mesh = join_meshes_as_scene(limbs_list + [pc_mesh])
-    return pc_mesh
-
-
-def get_smpl_mesh(verts, faces, palette='white'):
-    body_segger = body_segmentation('smpl')
-    device = verts.device
-    if palette == 'white':
-        colors = torch.ones_like(verts)
-    elif palette == 'part':
-        colors = torch.zeros_like(verts)
-        color_part = get_different_colors(len(body_segger), int_dtype=False)
-        for part_idx, k in enumerate(body_segger.keys()):
-            j = body_segger[k]
-            colors[:, j] = torch.FloatTensor(color_part[part_idx]).to(device)
-    mesh = Meshes(verts, faces, textures=TexturesVertex(colors))
-    return mesh
-
-
-def get_smpl_pc_mesh(verts, level=0, radius=0.01, palette='white'):
-    body_segger = body_segmentation('smpl')
-    device = verts.device
-    if palette == 'white':
-        colors = torch.ones_like(verts)
-    elif palette == 'part':
-        colors = torch.zeros_like(verts)
-        color_part = get_different_colors(len(body_segger), int_dtype=False)
-        for part_idx, k in enumerate(body_segger.keys()):
-            j = body_segger[k]
-            colors[:, j] = torch.FloatTensor(color_part[part_idx]).to(device)
-    pc_mesh = get_pointcloud_mesh(verts,
-                                  level=level,
-                                  radius=radius,
-                                  colors=colors)
-    return pc_mesh
 
 
 o3d = open3d
@@ -149,46 +91,6 @@ PointCloud_o3d = o3d.geometry.PointCloud
 TriangleMesh = o3d.geometry.TriangleMesh
 
 new_version = version.parse(o3d.__version__) > version.parse('0.9.0')
-
-# def get_oriented_bbox(
-#     points: Optional[Union[torch.Tensor, np.ndarray]] = None,
-#     meshes: Optional[Meshes] = None,
-# ) -> torch.Tensor:
-#     """
-#     Get oriented bounding box from a batch of meshes or points.
-
-#     Args:
-#         points (Optional[Union[torch.Tensor, np.ndarray]], optional):
-#             Batch of points, shape should be (batch, N, 3). N must > 8.
-#             Defaults to None.
-#         meshes (Optional[Meshes], optional):
-#             Batch of meshes. Defaults to None.
-
-#     Returns:
-#         torch.Tensor: shape would be (batch, 8, 3)
-#     """
-#     assert points is not None or meshes is not None,\
-#         'Please pass correct input.'
-#     if meshes is not None:
-#         for mesh in meshes:
-#             points.append(mesh.verts_padded())
-#     if isinstance(points, torch.Tensor):
-#         if points.ndim == 2:
-#             points = points[None]
-#         points = points.detach().cpu().numpy()
-#     elif isinstance(points, np.ndarray):
-#         if points.ndim == 2:
-#             points = points[None]
-#     bboxes = []
-#     for points_per_batch in points:
-#         points_per_batch = vec3d(points_per_batch)
-#         bbox = np.asarray(
-#             o3d.geometry.OrientedBoundingBox.create_from_points(
-#                 points=points_per_batch).get_box_points())
-#         bboxes.append(torch.Tensor(bbox))
-#     bboxes = torch.cat(bboxes).view(-1, 8, 3)
-#     return bboxes
-
 
 def axis_align_obb_rotation(
     points: Union[torch.FloatTensor,
@@ -273,39 +175,6 @@ def texture_uv2vc_t3d(meshes: Meshes):
     meshes = meshes.clone()
     meshes.textures = TexturesVertex(verts_features)
     return meshes
-
-
-# def texture_uv2vc_o3d(mesh: TriangleMesh):
-#     triangle_uvs = np.array(mesh.triangle_uvs)
-#     if new_version:
-#         im = np.asarray(mesh.textures[0])
-#     else:
-#         im = np.asarray(mesh.texture)
-
-#     height, width, _ = im.shape
-#     triangle_uvs = triangle_uvs * np.array([width, height])
-#     triangle_uvs = triangle_uvs.astype(np.int32)
-#     triangle_uvs[:, 0] = np.clip(triangle_uvs[:, 0], 0, width - 1)
-#     triangle_uvs[:, 1] = np.clip(triangle_uvs[:, 1], 0, height - 1)
-#     verts = np.asarray(mesh.vertices)
-#     num_verts = verts.shape[0]
-#     verts_color = np.zeros((num_verts, 3))
-#     triangles = np.asarray(mesh.triangles)
-#     verts_color[triangles.reshape(-1)] = im[triangle_uvs[:, 1],
-#                                             triangle_uvs[:, 0]] / 255
-#     mesh_out = TriangleMesh(vertices=mesh.vertices, triangles=mesh.triangles)
-#     mesh_out.vertex_colors = vec3d(verts_color)
-#     return mesh_out
-
-# def refine_uv_triangle_mesh(triangle_mesh):
-#     if len(triangle_mesh.textures) > 1:
-#         mesh_o3d = o3d.geometry.TriangleMesh(
-#             vertices=triangle_mesh.vertices, triangles=triangle_mesh.triangles)
-#         mesh_o3d.triangle_uvs = triangle_mesh.triangle_uvs
-#         mesh_o3d.textures = [triangle_mesh.textures[1]]
-#         return mesh_o3d
-#     else:
-#         return triangle_mesh
 
 def t3d_to_o3d_mesh(
     meshes: Meshes,
@@ -427,280 +296,6 @@ def o3d_to_t3d_mesh(meshes: Optional[Union[List[TriangleMesh],
     meshes_t3d = Meshes(verts=vertices, faces=faces, textures=textures)
     return meshes_t3d
 
-# def join_batch_axis_as_scene(meshes: Meshes, size=1.0, R=None, T=None):
-#     axis_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size)
-#     axis_mesh = o3d_to_t3d_mesh(axis_mesh)
-#     batch_size = len(meshes)
-#     axis_mesh = axis_mesh.extend(batch_size)
-#     meshes_final = join_batch_meshes_as_scene([meshes, axis_mesh])
-#     return meshes_final
-
-# def join_batch_bbox_as_scene(
-#         meshes: Meshes,
-#         bbox: Optional[Union[torch.Tensor, np.ndarray]] = None) -> Meshes:
-#     """
-#     Join a batch of mesh with bbox. `bbox` would be generated by function
-#     get_oriented_bbox if not provided.
-
-#     Args:
-#         meshes (Meshes): `Meshes` which has batch size N.
-#         bbox (Optional[Union[torch.Tensor, np.ndarray]], optional):
-#             Tensor or array which shape should be (N, 8, 3).
-#             If shape is (8, 3), will be extended to (N, 8, 3).
-
-#     Returns:
-#         Meshes: a batch of `Meshes` joined with bbox.
-#     """
-#     if isinstance(bbox, np.ndarray):
-#         bbox = torch.Tensor(bbox)
-#     elif bbox is None:
-#         bbox = get_oriented_bbox(meshes)
-#     radius = min(
-#         float(
-#             torch.min(
-#                 torch.sqrt(bbox[:, 0]**2 + bbox[:, 1]**2 + bbox[:, 2]**2)) /
-#             20), 0.1)
-
-#     def create_line_mesh(point1: Union[torch.Tensor, np.ndarray],
-#                          point2: Union[torch.Tensor,
-#                                        np.ndarray], radius: float):
-#         diff = point1 - point2
-#         length = float(
-#             torch.sqrt(diff[:, 0]**2 + diff[:, 1]**2 + diff[:, 2]**2))
-#         line = o3d.TriangleMesh.create_cylinder(
-#             radius=radius, height=length, resolution=20, split=4)
-#         return o3d_to_t3d_mesh(line)
-
-#     line_meshes = []
-#     edge_indexs = [[0, 1]]
-#     for edge in edge_indexs:
-#         line_meshes.append(
-#             create_line_mesh(bbox[edge[0]], bbox[edge[1]], radius))
-#     line_meshes = join_meshes_as_scene(line_meshes)
-#     batch_size = len(meshes)
-#     return join_batch_meshes_as_scene([line_meshes.extend(batch_size), meshes])
-
-
-def uv_to_uvmap(meshes, resolution):
-    device = meshes.device
-    textures = meshes.textures
-    assert isinstance(textures, TexturesUV)
-    faces_uv = textures.faces_uvs_padded()[0]
-    verts_uv = textures.verts_uvs_padded()[0].float()
-
-    faces = meshes.faces_padded()[0]
-    verts = meshes.verts_padded()[0].float()
-    texture_map = textures.maps_padded()[0].float()
-    # h, w, _ = texture_map.shape
-    resolution = texture_map.shape[:2] if resolution is None else resolution
-    h, w = resolution
-
-    uv_map = torch.ones(h, w, 3).float().to(device) * verts.min()
-    verts_uv_pixel = (verts_uv * torch.tensor([h, w]).to(device).view(1, 2) -
-                      0.5).float()
-    verts_uv_pixel[:, 1] = h - verts_uv_pixel[:, 1]
-    verts_uv_pixel = torch.cat([
-        torch.clip(verts_uv_pixel[:, 0:1], min=0, max=h),
-        torch.clip(verts_uv_pixel[:, 1:2], min=0, max=w)
-    ], 1)
-
-    faces_uv_pixel = verts_uv_pixel[faces_uv.view(-1)].view(-1, 3, 2)
-    x = torch.linspace(0, w - 1, w).view(1, -1).repeat(h,
-                                                       1).float().unsqueeze(-1)
-    y = torch.linspace(0, h - 1, h).view(-1, 1).repeat(1,
-                                                       w).float().unsqueeze(-1)
-    mesh_grid = torch.cat([x, y], -1).to(device)
-
-    def triangle_area(batch_triangle):
-        # B * 3 * 2
-        #  S=1/4 * sqrt((a+b+c)(a+b-c)(a+c-b)(b+c-a))
-        batch_triangle = batch_triangle.view(-1, 3, 2)
-        p1 = batch_triangle[:, 0]
-        p2 = batch_triangle[:, 1]
-        p3 = batch_triangle[:, 2]
-        a = torch.sqrt((p1[:, 0] - p2[:, 0])**2 + (p1[:, 1] - p2[:, 1])**2)
-        b = torch.sqrt((p2[:, 0] - p3[:, 0])**2 + (p2[:, 1] - p3[:, 1])**2)
-        c = torch.sqrt((p3[:, 0] - p1[:, 0])**2 + (p3[:, 1] - p1[:, 1])**2)
-        S = 1 / 4 * torch.sqrt(
-            (a + b + c) * (a + b - c) * (a + c - b) * (b + c - a))
-        return S
-
-    for triangle_idx in trange(faces_uv_pixel.shape[0]):
-        # triangle_coord = faces_uv_pixel[triangle_idx]
-        triangle_coord_pixel = faces_uv_pixel[triangle_idx]
-        mesh_grid_ = mesh_grid[triangle_coord_pixel[:, 1].min().floor().long(
-        ):triangle_coord_pixel[:, 1].max().ceil().long(),
-                               triangle_coord_pixel[:, 0].min().floor().long(
-                               ):triangle_coord_pixel[:,
-                                                      0].max().ceil().long()]
-        uv_map_ = uv_map[triangle_coord_pixel[:, 1].min().floor().long(
-        ):triangle_coord_pixel[:, 1].max().ceil().long(),
-                         triangle_coord_pixel[:, 0].min().floor().long(
-                         ):triangle_coord_pixel[:, 0].max().ceil().long()]
-        temp_h, temp_w, _ = mesh_grid_.shape
-
-        triangle_xyz = verts[faces[triangle_idx]]
-        S = triangle_area(triangle_coord_pixel)
-        P = mesh_grid_.reshape(-1, 1, 2)
-
-        batch = P.shape[0]
-
-        A = triangle_coord_pixel[0].view(1, 1, 2).repeat(batch, 1, 1)
-        B = triangle_coord_pixel[1].view(1, 1, 2).repeat(batch, 1, 1)
-        C = triangle_coord_pixel[2].view(1, 1, 2).repeat(batch, 1, 1)
-        S_PBC = triangle_area(torch.cat([P, B, C], 1))
-        S_PAC = triangle_area(torch.cat([P, A, C], 1))
-        S_PAB = triangle_area(torch.cat([P, A, B], 1))
-        barycentric_coord = torch.cat([
-            S_PBC.view(-1, 1) / S,
-            S_PAC.view(-1, 1) / S,
-            S_PAB.view(-1, 1) / S
-        ], -1).view(temp_h, temp_w, 3)
-        eps = 1e-2
-        inside_triangle_index = torch.where(
-            torch.abs(barycentric_coord.sum(-1) - 1) < eps)
-        barycentric_coord_ = barycentric_coord[inside_triangle_index]
-        uv_map_[inside_triangle_index] = (barycentric_coord_.view(
-            -1, 1, 3) @ triangle_xyz.view(1, 3, 3)).view(-1, 3)
-    return uv_map
-
-
-def uv_map_to_meshuv(uv_map, meshes, texture_map):
-    faces = meshes.faces_padded()[0]
-    verts = meshes.verts_padded()[0]
-    num_verts = verts.shape[0]
-    verts_uv_pixel = torch.zeros(num_verts, 2).long()
-    faces_uv = faces
-    h, w, _ = uv_map.shape
-
-    def distance(vec1, vec2):
-        vec1 = vec1.view(-1, 3)
-        vec2 = vec2.view(-1, 3)
-        diff = vec1 - vec2
-        L = diff[:, 0]**2 + diff[:, 1]**2 + diff[:, 2]**2
-        return L
-
-    for vert_idx in trange(num_verts):
-        coord = torch.argmin(
-            distance(uv_map, verts[vert_idx].view(1, 1, 3)).view(h, w))
-        line = coord // h
-        row = coord - w * line
-        verts_uv_pixel[vert_idx, 0] = row + 0.5
-        verts_uv_pixel[vert_idx, 1] = line + 0.5
-    verts_uv = verts_uv_pixel / torch.Tensor([w, h]).view(1, 2)
-    verts_uv = torch.clip(verts_uv, min=0.0, max=1.0)
-    textures = TexturesUV(verts_uvs=verts_uv[None],
-                          faces_uvs=faces_uv[None],
-                          maps=texture_map[None])
-    meshes.textures = textures
-    return meshes
-
-
-# def save_meshes_as_objs(obj_list, meshes: Union[Meshes, TriangleMesh,
-#                                                 List[TriangleMesh]]):
-#     if not isinstance(obj_list, list):
-#         obj_list = [obj_list]
-#     if isinstance(meshes, TriangleMesh):
-#         meshes = [meshes]
-#     if isinstance(meshes, Meshes):
-#         if isinstance(meshes.textures, TexturesVertex):
-#             meshes = t3d_to_o3d_mesh(meshes)
-#     assert len(obj_list) >= len(meshes)
-#     if isinstance(meshes, Meshes):
-
-#         if isinstance(meshes.textures, TexturesUV):
-#             verts_uvs = meshes.textures.verts_uvs_padded()
-#             faces_uvs = meshes.textures.faces_uvs_padded()
-#             texture_maps = meshes.textures.maps_padded()
-#         else:
-#             verts_uvs = None
-#             faces_uvs = None
-#         verts = meshes.verts_padded()
-#         faces = meshes.faces_padded()
-#         for index in range(len(meshes)):
-#             prepare_output_path(
-#                 obj_list[index], allowed_suffix=['.obj'], path_type='file')
-#             save_obj(
-#                 obj_list[index],
-#                 verts=verts[index],
-#                 faces=faces[index],
-#                 faces_uvs=faces_uvs[index],
-#                 verts_uvs=verts_uvs[index],
-#                 texture_map=texture_maps[index])
-#     else:
-#         for index in range(len(meshes)):
-#             o3d.io.write_triangle_mesh(
-#                 obj_list[index], meshes[index], write_ascii=True)
-# borrowed from https://github.com/CZ-Wu/GPNet/blob/d8df3b1489800626d4f503f62d2ae8daffe8b686/tools/visualization.py
-
-
-def get_world_mesh_list(planeWidth=4, axisHeight=0.7, axisRadius=0.02, add_plane=True):
-    groundColor = [220, 220, 220, 255]    # face_colors: [R, G, B, transparency]
-    xColor = [255, 0, 0, 128]
-    yColor = [0, 255, 0, 128]
-    zColor = [0, 0, 255, 128]
-
-    if add_plane:
-        ground = trimesh.primitives.Box(
-            center=[0, 0, -0.0001],
-            extents=[planeWidth, planeWidth, 0.0002]
-        )
-        ground.visual.face_colors = groundColor
-
-    xAxis = trimesh.primitives.Cylinder(
-        radius=axisRadius,
-        height=axisHeight,
-    )
-    xAxis.apply_transform(matrix=np.mat(
-        ((  0,  0, 1, axisHeight / 2),
-        (   0,  1, 0, 0),
-        (   -1, 0, 0, 0),
-        (   0,  0, 0, 1))
-    ))
-    xAxis.visual.face_colors = xColor
-    yAxis = trimesh.primitives.Cylinder(
-        radius=axisRadius,
-        height=axisHeight,
-    )
-    yAxis.apply_transform(matrix=np.mat(
-        ((  1, 0, 0, 0),
-        (   0, 0, -1, axisHeight / 2),
-        (   0, 1, 0, 0),
-        (   0, 0, 0, 1))
-    ))
-    yAxis.visual.face_colors = yColor
-    zAxis = trimesh.primitives.Cylinder(
-        radius=axisRadius,
-        height=axisHeight,
-    )
-    zAxis.apply_transform(matrix=np.mat(
-        ((1, 0, 0, 0),
-         (0, 1, 0, 0),
-         (0, 0, 1, axisHeight / 2),
-         (0, 0, 0, 1))
-    ))
-    zAxis.visual.face_colors = zColor
-    xBox = trimesh.primitives.Box(
-        extents=[axisRadius * 3, axisRadius * 3, axisRadius * 3]
-    )
-    xBox.apply_translation((axisHeight, 0, 0))
-    xBox.visual.face_colors = xColor
-    yBox = trimesh.primitives.Box(
-        extents=[axisRadius * 3, axisRadius * 3, axisRadius * 3]
-    )
-    yBox.apply_translation((0, axisHeight, 0))
-    yBox.visual.face_colors = yColor
-    zBox = trimesh.primitives.Box(
-        extents=[axisRadius * 3, axisRadius * 3, axisRadius * 3]
-    )
-    zBox.apply_translation((0, 0, axisHeight))
-    zBox.visual.face_colors = zColor
-    if add_plane:
-        worldMeshList = [ground, xAxis, yAxis, zAxis, xBox, yBox, zBox]
-    else:
-        worldMeshList = [xAxis, yAxis, zAxis, xBox, yBox, zBox]
-    return worldMeshList
-
 
 def get_checkerboard_plane(plane_width=4, num_boxes=9, center=True):
 
@@ -726,85 +321,3 @@ def get_checkerboard_plane(plane_width=4, num_boxes=9, center=True):
             meshes.append(ground)
 
     return meshes
-
-
-def getNewCoordinate(axisHeight=0.05, axisRadius=0.001):
-    xColor = [200, 50, 0, 128]
-    yColor = [0, 200, 50, 128]
-    zColor = [50, 0, 200, 128]
-
-    xAxis2 = trimesh.primitives.Cylinder(
-        radius=axisRadius,
-        height=axisHeight,
-    )
-    xAxis2.apply_transform(matrix=np.mat(
-        ((  0,  0, 1, axisHeight / 2),
-        (   0,  1, 0, 0),
-        (   -1, 0, 0, 0),
-        (   0,  0, 0, 1))
-    ))
-    xAxis2.visual.face_colors = xColor
-    yAxis2 = trimesh.primitives.Cylinder(
-        radius=axisRadius,
-        height=axisHeight,
-    )
-    yAxis2.apply_transform(matrix=np.mat(
-        ((  1, 0, 0, 0),
-        (   0, 0, -1, axisHeight / 2),
-        (   0, 1, 0, 0),
-        (   0, 0, 0, 1))
-    ))
-    yAxis2.visual.face_colors = yColor
-    zAxis2 = trimesh.primitives.Cylinder(
-        radius=axisRadius,
-        height=axisHeight,
-    )
-    zAxis2.apply_transform(matrix=np.mat(
-        ((1, 0, 0, 0),
-         (0, 1, 0, 0),
-         (0, 0, 1, axisHeight / 2),
-         (0, 0, 0, 1))
-    ))
-    zAxis2.visual.face_colors = zColor
-    xBox2 = trimesh.primitives.Box(
-        extents=[axisRadius * 3, axisRadius * 3, axisRadius * 3]
-    )
-    xBox2.apply_translation((axisHeight, 0, 0))
-    xBox2.visual.face_colors = xColor
-    yBox2 = trimesh.primitives.Box(
-        extents=[axisRadius * 3, axisRadius * 3, axisRadius * 3]
-    )
-    yBox2.apply_translation((0, axisHeight, 0))
-    yBox2.visual.face_colors = yColor
-    zBox2 = trimesh.primitives.Box(
-        extents=[axisRadius * 3, axisRadius * 3, axisRadius * 3]
-    )
-    zBox2.apply_translation((0, 0, axisHeight))
-    zBox2.visual.face_colors = zColor
-
-    return 1
-
-
-def meshVisualization(mesh):
-    worldMeshList = get_world_mesh_list(planeWidth=0.2, axisHeight=0.05, axisRadius=0.001)
-    mesh.visual.face_colors = [255, 128, 255, 200]
-    worldMeshList.append(mesh)
-    scene = trimesh.Scene(worldMeshList)
-    scene.show()
-
-
-def meshPairVisualization(mesh1, mesh2):
-    worldMeshList = get_world_mesh_list(planeWidth=0.2, axisHeight=0.05, axisRadius=0.001)
-    mesh1.visual.face_colors = [255, 128, 255, 200]
-    mesh2.visual.face_colors = [255, 255, 128, 200]
-
-    worldMeshList.append((mesh1, mesh2))
-    scene = trimesh.Scene(worldMeshList)
-    scene.show()
-
-
-if __name__ == '__main__':
-    # meshVisualization(trimesh.convex.convex_hull(np.array([[0.1, 0, 0], [0, 0.1, 0], [0, 0, 0.1], [0, 0, 0]])))
-    scene = trimesh.Scene(get_checkerboard_plane())
-    scene.add_geometry(get_world_mesh_list(add_plane=False))
-    scene.show()
