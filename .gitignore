@@ -122,9 +122,7 @@ data
 
 
 # Visualization
-!assets/*png
 *.mp4
-*.png
 *.gif
 *.jpg
 *.obj
