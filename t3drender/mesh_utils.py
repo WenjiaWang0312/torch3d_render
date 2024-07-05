@@ -170,65 +170,6 @@ TriangleMesh = o3d.geometry.TriangleMesh
 
 new_version = version.parse(o3d.__version__) > version.parse('0.9.0')
 
-def axis_align_obb_rotation(
-    points: Union[torch.FloatTensor,
-                  np.ndarray], bbox: Union[torch.FloatTensor, np.ndarray]
-) -> Union[torch.FloatTensor, np.ndarray]:
-    """[summary]
-
-    Args:
-        points (Union[torch.FloatTensor, np.ndarray]): [description]
-        bbox (Union[torch.FloatTensor, np.ndarray]): [description]
-
-    Returns:
-        Union[torch.FloatTensor, np.ndarray]: [description]
-    """
-    assert type(points) is type(
-        bbox), 'Points and bbox should be the same type'
-    device = torch.device('cpu')
-    if isinstance(bbox, np.ndarray):
-        bbox = torch.Tensor(bbox)
-        points = torch.Tensor(points)
-        data_type = 'numpy'
-    else:
-        data_type = 'tensor'
-        device = points.device
-
-    def norm(vec):
-        vec = vec.view(-1, 3)
-        # shape should be (n, 3), return the same shape normed vec
-        return vec / torch.sqrt(vec[:, 0]**2 + vec[:, 1]**2 + vec[:, 2]**2)
-
-    cross = np.corss if isinstance(bbox, np.ndarray) else torch.cross
-    original_shape = points.shape
-    points = points.reshape(-1, 3)
-    bbox = bbox.reshape(8, 3)
-    diff = bbox[0:1] - bbox
-    length = diff[:, 0]**2 + diff[:, 1]**2 + diff[:, 2]**2
-    max_bound = length.max() + 1
-    length[0] = max_bound
-    index1 = int(torch.argmin(length))
-    length[index1] = max_bound
-    index2 = int(torch.argmin(length))
-    axis1 = norm(bbox[index1] - bbox[0])
-    axis2 = norm(bbox[index2] - bbox[0])
-    axis3 = cross(axis1, axis2)
-    rotmat = torch.cat([axis1, axis2, axis3])
-    arg = torch.argmax(abs(rotmat), 1)
-    sort_index = [arg.tolist().index(i) for i in [0, 1, 2]]
-    rotmat = rotmat[sort_index]
-    sign = torch.sign(rotmat[torch.arange(3), torch.arange(3)])
-    rotmat *= sign
-    rotation = Rotate(rotmat.T, device=device)
-    points = rotation.transform_points(points)
-    points = points.reshape(original_shape)
-    if data_type == 'numpy':
-        points = points.numpy()
-    else:
-        points = points
-    return points
-
-
 def texture_uv2vc_t3d(meshes: Meshes):
     device = meshes.device
     vert_uv = meshes.textures.verts_uvs_padded()
