@@ -37,7 +37,7 @@ moved_verts = meshes.verts_padded()
 moved_verts[..., 2] += 2
 meshes = meshes.update_padded(moved_verts)
 
-# The default camera setting does not set extrinsic matrix
+# The default camera setting does not set extrinsic matrix, for advanced camera setting you need to feed R, T matrix into cameras
 meshes.textures = TexturesVertex(torch.randn_like(meshes.verts_padded()))
 image_tensors = render_rgb(meshes, device=device, resolution=(512, 512), fov=90, batch_size=30, verbose=True)
 image = image_tensors[..., :3].detach().cpu().numpy() * 256
@@ -64,7 +64,7 @@ moved_verts = meshes.verts_padded()
 moved_verts[..., 2] += 2
 meshes = meshes.update_padded(moved_verts)
 
-# The default camera setting does not set extrinsic matrix
+# The default camera setting does not set extrinsic matrix, for advanced camera setting you need to feed R, T matrix into cameras
 image_tensors = render_normal(meshes, device=device, resolution=(512, 512), fov=90, batch_size=30, verbose=True)
 image_tensors = image_tensors / 2 + 0.5
 image = image_tensors[..., :3].detach().cpu().numpy() * 256
@@ -84,13 +84,9 @@ from t3drender.render.render_functions import render_depth_orthographic
 import cv2
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-# You need to konw where to put your meshes
 meshes = ico_sphere(5, device)
-moved_verts = meshes.verts_padded()
-moved_verts[..., 2] += 2
-meshes = meshes.update_padded(moved_verts)
 
-# The default camera setting does not set extrinsic matrix
+# The default camera setting does not set extrinsic matrix, for advanced camera setting you need to feed R, T matrix into cameras
 image_tensors = render_depth_orthographic(meshes, device=device, resolution=(512, 512), batch_size=30, verbose=True)
 image_tensors = image_tensors / image_tensors.max()
 image = image_tensors[..., :3].detach().cpu().numpy() * 256
