@@ -17,6 +17,23 @@ from pytorch3d.utils.ico_sphere import ico_sphere
 from pytorch3d.renderer.mesh import TexturesVertex
 
 
+def load_plys_as_meshes(
+    files: Union[str, List[str]],
+    device: Optional[Union[torch.device, str]] = None,
+    load_textures: bool = True,
+) -> Meshes:
+    writer = IO()
+    meshes = []
+    if not isinstance(files, list):
+        files = [files]
+    for idx in range(len(files)):
+        assert files[idx].endswith('.ply'), 'Please input .ply files.'
+        mesh = writer.load_mesh(
+            path=files[idx], include_textures=load_textures, device=device)
+        meshes.append(mesh)
+    meshes = join_meshes_as_batch(meshes, include_textures=load_textures)
+    return meshes
+
 
 def save_meshes_as_plys(files: Union[str, List[str]],
                         meshes: Optional[Meshes] = None) -> None:
@@ -380,5 +397,50 @@ def get_checkerboard_plane(plane_width=4, num_boxes=9, center=True):
             # ground.apply_transform(trimesh.transformations.rotation_matrix(np.rad2deg(-120), direction=[1,0,0]))
             ground.visual.face_colors = black if ((i+j) % 2) == 0 else white
             meshes.append(ground)
-
+    meshes = trimesh.util.concatenate(meshes)
     return meshes
+
+
+def create_checkerboard_mesh(N, M, square_size, center):
+
+    x_start = center[0] - (M / 2) * square_size
+    y_start = center[1] - (N / 2) * square_size
+    z = center[2]
+
+    vertices = []
+    faces = []
+    colors = []
+
+    for i in range(N):
+        for j in range(M):
+            x0 = x_start + j * square_size
+            y0 = y_start + i * square_size
+            x1 = x0 + square_size
+            y1 = y0 + square_size
+
+            v_idx = len(vertices)
+
+            vertices.extend([
+                [x0, y0, z],
+                [x1, y0, z],
+                [x1, y1, z],
+                [x0, y1, z]
+            ])
+
+            faces.extend([
+                [v_idx, v_idx + 1, v_idx + 2],
+                [v_idx, v_idx + 2, v_idx + 3]
+            ])
+
+            color = [1.0, 1.0, 1.0] if (i + j) % 2 == 0 else [0.5, 0.5, 0.5]
+            colors.extend([color] * 4)
+
+    vertices = torch.tensor(vertices, dtype=torch.float32)
+    faces = torch.tensor(faces, dtype=torch.int64)
+    colors = torch.tensor(colors, dtype=torch.float32)
+
+    textures = TexturesVertex(verts_features=colors.unsqueeze(0))
+
+    mesh = Meshes(verts=[vertices], faces=[faces], textures=textures)
+    
+    return mesh

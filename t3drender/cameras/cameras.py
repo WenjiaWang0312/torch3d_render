@@ -204,11 +204,11 @@ class NewCamerasBase(cameras.CamerasBase):
                               R=self.R[index],
                               T=self.T[index],
                               focal_length=self.focal_length[index]
-                              if self.focal_length is not None else None,
+                              if getattr(self, 'focal_length', None) is not None else None,
                               principal_point=self.principal_point[index]
-                              if self.principal_point is not None else None,
+                              if getattr(self, 'principal_point', None) is not None else None,
                               image_size=self.get_image_size()[index].long()
-                              if self.get_image_size() is not None else None,
+                              if getattr(self, 'image_size', None) is not None else None,
                               in_ndc=self.in_ndc(),
                               convention='pytorch3d',
                               device=self.device)
