@@ -161,7 +161,7 @@ class BaseRenderer(nn.Module):
         if isinstance(cameras, (NewCamerasBase)):
             self.resolution = (int(cameras.resolution[0][0]),
                                int(cameras.resolution[0][1]))
-        if 'resolution' in kwargs:
+        if kwargs.get('resolution', None) is not None:
             self.resolution = kwargs.get('resolution')
         self.rasterizer.raster_settings.image_size = self.resolution
 

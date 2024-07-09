@@ -48,7 +48,7 @@ class NormalRenderer(BaseRenderer):
         Returns:
             Union[torch.Tensor, None]: return tensor or None.
         """
-
+        
         meshes = meshes.to(self.device)
         self._update_resolution(cameras, **kwargs)
         fragments = self.rasterizer(meshes_world=meshes, cameras=cameras)

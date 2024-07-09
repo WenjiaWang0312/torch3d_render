@@ -209,6 +209,8 @@ class NewCamerasBase(cameras.CamerasBase):
                               if getattr(self, 'principal_point', None) is not None else None,
                               image_size=self.get_image_size()[index].long()
                               if getattr(self, 'image_size', None) is not None else None,
+                              resolution=self.get_image_size()[index].long()
+                              if getattr(self, 'resolution', None) is not None else None,
                               in_ndc=self.in_ndc(),
                               convention='pytorch3d',
                               device=self.device)
@@ -701,6 +703,8 @@ class PerspectiveCameras(cameras.PerspectiveCameras, NewCamerasBase):
         """
         if image_size is not None:
             kwargs.update({'image_size': image_size})
+        if kwargs.get('resolution', None) is not None:
+            kwargs.update({'image_size': kwargs.get('resolution')})
         kwargs.update(
             _in_ndc=in_ndc,
             _is_perspective=True,
