@@ -12,8 +12,9 @@ from pytorch3d.structures import Meshes
 
 class OpticalFlowShader(nn.Module):
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, with_grid=False, **kwargs) -> None:
         super().__init__()
+        self.with_grid = with_grid
 
     @staticmethod
     def gen_mesh_grid(H, W, N: int = 1):
@@ -39,8 +40,11 @@ class OpticalFlowShader(nn.Module):
             barycentric_coords=fragments.bary_coords,
             face_attributes=faces_flow)
         N, H, W, _, _ = pixel_flow.shape
-        mesh_grid = self.gen_mesh_grid(N=N, H=H, W=W)
-        pixel_flow = pixel_flow.squeeze(-2) + mesh_grid.to(pixel_flow.device)
+        if self.with_grid:
+            mesh_grid = self.gen_mesh_grid(N=N, H=H, W=W)
+            pixel_flow = pixel_flow.squeeze(-2) + mesh_grid.to(pixel_flow.device)
+        else:
+            pixel_flow = pixel_flow.squeeze(-2)
         return pixel_flow
 
 
