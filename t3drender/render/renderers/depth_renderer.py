@@ -13,7 +13,7 @@ class DepthRenderer(BaseRenderer):
         self,
         resolution: Tuple[int, int] = None,
         device: Union[torch.device, str] = 'cpu',
-        depth_max: Union[int, float, torch.Tensor] = None,
+        return_fragments: bool = False,
         **kwargs,
     ) -> None:
         """Renderer for depth map of meshes.
@@ -24,8 +24,6 @@ class DepthRenderer(BaseRenderer):
             device (Union[torch.device, str], optional):
                 You can pass a str or torch.device for cpu or gpu render.
                 Defaults to 'cpu'.
-            depth_max (Union[int, float, torch.Tensor], optional):
-                The max value for normalize depth range. Defaults to None.
 
         Returns:
             None
@@ -33,7 +31,7 @@ class DepthRenderer(BaseRenderer):
         super().__init__(resolution=resolution,
                          device=device,
                          **kwargs)
-        self.depth_max = depth_max
+        self.return_fragments = return_fragments
 
     def forward(self,
                 meshes: Optional[Meshes] = None,
@@ -57,5 +55,5 @@ class DepthRenderer(BaseRenderer):
         depth_map = self.shader(fragments=fragments,
                                 meshes=meshes,
                                 cameras=cameras)
-
         return depth_map
+
