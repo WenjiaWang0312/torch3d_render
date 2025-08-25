@@ -6,5 +6,6 @@ from .segmentation_renderer import SegmentationRenderer
 from .silhouette_renderer import SilhouetteRenderer
 from .pointcloud_renderer import PointCloudRenderer
 from .flow_renderer import OpticalFlowRenderer
+from .rgbd_renderer import RGBDRenderer
 
 __all__ = ['BaseRenderer', 'DepthRenderer', 'MeshRenderer', 'NormalRenderer', 'SegmentationRenderer', 'SilhouetteRenderer', 'PointCloudRenderer', 'OpticalFlowRenderer']

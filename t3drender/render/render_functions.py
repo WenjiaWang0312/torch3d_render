@@ -1,7 +1,7 @@
 import torch
 from typing import Union, List
 from t3drender.render.render_runner import render_mp, render_mp_flow
-from t3drender.render.renderers import MeshRenderer, DepthRenderer, NormalRenderer, OpticalFlowRenderer, SilhouetteRenderer, SegmentationRenderer
+from t3drender.render.renderers import MeshRenderer, DepthRenderer, NormalRenderer, OpticalFlowRenderer, SilhouetteRenderer, SegmentationRenderer, RGBDRenderer
 from pytorch3d.renderer.mesh.shader import SoftPhongShader
 from t3drender.render.shaders import NormalShader, DepthShader, OpticalFlowShader, SegmentationShader
 from t3drender.cameras import PerspectiveCameras, FoVOrthographicCameras
@@ -9,7 +9,7 @@ from t3drender.render.lights import PointLights
 import multiprocessing
 
 
-def render_rgb(meshes, device, resolution=(512, 512), focal_length=512, cameras=None, batch_size=30, verbose=False):
+def render_rgb(meshes, device, lights=None, resolution=(512, 512), focal_length=512, cameras=None, batch_size=30, verbose=False):
     K = torch.eye(3, 3)[None]
     h, w = resolution
     mesh_renderer = MeshRenderer(resolution=resolution, shader=SoftPhongShader())
@@ -20,9 +20,26 @@ def render_rgb(meshes, device, resolution=(512, 512), focal_length=512, cameras=
         K[:, 0, 2] = w / 2
         K[:, 1, 2] = h / 2
         cameras = PerspectiveCameras(in_ndc=False, K=K, convention='opencv', resolution=resolution)
-    lights = PointLights(location=[[0.0, 0.0, 0.0]])
+    if lights is None:
+        lights = PointLights(location=[[0.0, 0.0, 0.0]])
 
     rendered_frames = render_mp(renderer=mesh_renderer, meshes=meshes, lights=lights, batch_size=batch_size, verbose=verbose, cameras=cameras, device=device)
+    return rendered_frames
+
+def render_rgbd(meshes, device, resolution=(512, 512), focal_length=512, cameras=None, batch_size=30, no_grad=False, verbose=False):
+    h, w = resolution
+    mesh_renderer = RGBDRenderer(resolution=resolution, shader=SoftPhongShader(), depth_shader=DepthShader())
+
+    if cameras is None:
+        K = torch.eye(3, 3)[None]
+        K[:, 0, 0] = focal_length
+        K[:, 1, 1] = focal_length
+        K[:, 0, 2] = w / 2
+        K[:, 1, 2] = h / 2
+        cameras = PerspectiveCameras(in_ndc=False, K=K, convention='opencv', resolution=resolution)
+    lights = PointLights(location=[[0.0, 0.0, 0.0]])
+
+    rendered_frames = render_mp(renderer=mesh_renderer, meshes=meshes, lights=lights, batch_size=batch_size, verbose=verbose, cameras=cameras, device=device, no_grad=no_grad)
     return rendered_frames
 
 def render_segmentation(meshes, device, resolution=(512, 512), focal_length=512, cameras=None, batch_size=30, verbose=False):

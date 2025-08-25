@@ -7,6 +7,8 @@ import warnings
 from typing import List, Optional, Union
 from packaging import version
 from pytorch3d.io import IO
+from copy import deepcopy
+TriangleMesh = open3d.geometry.TriangleMesh
 from pytorch3d.io.obj_io import save_obj, load_objs_as_meshes
 from pytorch3d.renderer.mesh.textures import TexturesUV, TexturesVertex
 from pytorch3d.structures import (Meshes, Pointclouds, join_meshes_as_scene, join_meshes_as_batch,
@@ -15,6 +17,48 @@ from pytorch3d.transforms import Rotate
 
 from pytorch3d.utils.ico_sphere import ico_sphere
 from pytorch3d.renderer.mesh import TexturesVertex
+
+
+def mesh_uv2vc(meshes: Meshes) -> Meshes:
+    """Convert a Pytorch3D meshes's textures from TexturesUV to TexturesVertex.
+
+    Args:
+        meshes (Meshes): input Meshes.
+
+    Returns:
+        Meshes: converted Meshes.
+    """
+    assert isinstance(meshes.textures, TexturesUV)
+    device = meshes.device
+    vert_uv = meshes.textures.verts_uvs_padded()
+    batch_size = vert_uv.shape[0]
+    verts_features = []
+    num_verts = meshes.verts_padded().shape[1]
+    for index in range(batch_size):
+        face_uv = vert_uv[index][meshes.textures.faces_uvs_padded()
+                                 [index].view(-1)]
+
+        img = meshes.textures._maps_padded[index]
+        height, width, _ = img.shape
+
+        face_uv = face_uv * torch.Tensor([width - 1, height - 1
+                                          ]).long().to(device)
+
+        face_uv[:, 0] = torch.clip(face_uv[:, 0], 0, width - 1)
+        face_uv[:, 1] = torch.clip(face_uv[:, 1], 0, height - 1)
+        face_uv = face_uv.long()
+        faces = meshes.faces_padded()
+        verts_rgb = torch.zeros(1, num_verts, 3).to(device)
+
+        verts_rgb[:, faces.view(-1)] = img[height - 1 - face_uv[:, 1],
+                                           face_uv[:, 0]]
+
+        verts_features.append(verts_rgb)
+    verts_features = torch.cat(verts_features)
+
+    meshes = meshes.clone()
+    meshes.textures = TexturesVertex(verts_features)
+    return meshes
 
 
 def load_plys_as_meshes(
@@ -385,3 +429,195 @@ def create_checkerboard_mesh(N, M, square_size, center):
     mesh = Meshes(verts=[vertices], faces=[faces], textures=textures)
     
     return mesh
+
+
+def trimesh_to_o3dmesh(meshes):
+    """
+    convert trimesh mesh to open3d mesh
+    """
+    trimesh_mesh = deepcopy(meshes)  # if not copy, vertex normal cannot be assigned
+    o3d_mesh = o3d.geometry.TriangleMesh(vertices=o3d.utility.Vector3dVector(trimesh_mesh.vertices),
+                                         triangles=o3d.utility.Vector3iVector(trimesh_mesh.faces))
+    # as_open3d method not working for color and normal
+    if hasattr(trimesh_mesh.visual, 'vertex_colors'):
+        o3d_mesh.vertex_colors = o3d.utility.Vector3dVector(trimesh_mesh.visual.vertex_colors[:, :3] / 255.0)
+    o3d_mesh.compute_vertex_normals()  # if not compute but only assign trimesh normals, the normal rendering fails, not sure about the reason
+    o3d_mesh.vertex_normals = o3d.utility.Vector3dVector(trimesh_mesh.vertex_normals)
+    return o3d_mesh
+
+
+def t3dmesh_to_o3dmesh(
+    meshes: Meshes,
+    include_textures: bool = True,
+) -> List[TriangleMesh]:
+    """
+    Convert pytorch3d Meshes to open3d TriangleMesh.
+    Since open3d 0.9.0.0 doesn't support batch meshes, we only feed single
+    `Meshes` of batch N. Will return a list(N) of `TriangleMesh`.
+
+    Args:
+        meshes (Meshes): batched `Meshes`.
+            Defaults to None.
+        include_textures (bool, optional): whether contain textures.
+            Defaults to False.
+    Returns:
+        List[TriangleMesh]: return a list of open3d `TriangleMesh`.
+    """
+    meshes_o3d = []
+    if meshes is not None:
+        vertices = meshes.verts_padded().clone().detach().cpu().numpy()
+        faces = meshes.faces_padded().clone().detach().cpu().numpy()
+        textures = meshes.textures.clone().detach()
+        batch_size = len(meshes)
+    else:
+        raise ValueError('The input mesh is None. Please pass right inputs.')
+    for index in range(batch_size):
+        mesh_o3d = TriangleMesh(
+            vertices=vec3d(vertices[index]), triangles=vec3i(faces[index]))
+        if include_textures:
+            if isinstance(textures, TexturesVertex):
+                mesh_o3d.vertex_colors = vec3d(
+                    textures.verts_features_padded()
+                    [index].detach().cpu().numpy())
+            elif isinstance(textures, TexturesUV):
+                vert_uv = textures.verts_uvs_padded()[index]
+                face_uv = vert_uv[textures.faces_uvs_padded()[index].view(-1)]
+
+                img = textures._maps_padded.cpu().numpy()[index]
+                img = (img * 255).astype(np.uint8)
+                img = cv2.flip(img, 0)
+                if new_version:
+                    mesh_o3d.textures = [o3d.geometry.Image(img)]
+                    mesh_o3d.triangle_uvs = vec2d(
+                        face_uv.detach().cpu().numpy())
+                else:
+                    mesh_o3d.triangle_uvs = list(
+                        face_uv.detach().cpu().numpy())
+                    mesh_o3d.texture = o3d.geometry.Image(img)
+            elif textures is None:
+                warnings.warn('Cannot load textures from original mesh.')
+        meshes_o3d.append(mesh_o3d)
+    return meshes_o3d
+
+def o3dmesh_to_t3dmesh(meshes: Optional[Union[List[TriangleMesh],
+                                           TriangleMesh]] = None,
+                    include_textures: bool = True) -> Meshes:
+    """
+    Convert open3d TriangleMesh to pytorch3d Meshes .
+    Args:
+        meshes (Optional[Union[List[TriangleMesh], TriangleMesh]], optional):
+            [description]. Defaults to None.
+        include_textures (bool, optional): [description]. Defaults to True.
+
+    Returns:
+        Meshes: [description]
+    """
+
+    if not isinstance(meshes, list):
+        meshes = [meshes]
+    vertices = [torch.Tensor(np.asarray(mesh.vertices)) for mesh in meshes]
+
+    vertices = list_to_padded(vertices, pad_value=0.0)
+    faces = [torch.Tensor(np.asarray(mesh.triangles)) for mesh in meshes]
+    faces = list_to_padded(faces, pad_value=-1.0)
+    if include_textures:
+        has_vertex_colors = meshes[0].has_vertex_colors()
+        if new_version:
+            has_textures = meshes[0].has_textures()
+        else:
+            has_textures = meshes[0].has_texture()
+        if has_vertex_colors:
+            features = [
+                torch.Tensor(np.asarray(mesh.vertex_colors)) for mesh in meshes
+            ]
+
+            features = list_to_padded(features, pad_value=0.0)
+            textures = TexturesVertex(verts_features=features)
+        elif has_textures:
+            if new_version:
+                maps = [
+                    torch.Tensor(
+                        np.asarray(mesh.textures[0]).astype(np.float32))
+                    for mesh in meshes
+                ]
+            else:
+                maps = [
+                    torch.Tensor(np.asarray(mesh.texture).astype(np.float32))
+                    for mesh in meshes
+                ]
+            maps = list_to_padded(maps, pad_size=0) / 255.0
+            faces_uvs = []
+            verts_uvs = []
+            for mesh in meshes:
+                faces_uv = np.asarray(mesh.triangles)
+                verts_uv = np.zeros((vertices.shape[1], 2))
+                verts_uv[faces_uv.reshape(-1)] = np.asarray(mesh.triangle_uvs)
+                faces_uvs.append(torch.Tensor(faces_uv))
+                verts_uvs.append(torch.Tensor(verts_uv))
+            faces_uvs = list_to_padded(faces_uvs, pad_value=0.0)
+            verts_uvs = list_to_padded(verts_uvs, pad_value=0.0)
+            textures = TexturesUV(
+                maps=maps, faces_uvs=faces_uvs, verts_uvs=verts_uvs)
+        else:
+            warnings.warn('Cannot load textures from original mesh.')
+            textures = None
+    else:
+        textures = None
+    meshes_t3d = Meshes(verts=vertices, faces=faces, textures=textures)
+    return meshes_t3d
+
+
+def t3dmesh_to_trimesh(meshes: Meshes) -> trimesh.Trimesh:
+    vertices = padded_to_list(meshes.verts_padded(),
+                              meshes.num_verts_per_mesh().tolist())
+    faces = padded_to_list(meshes.faces_padded(),
+                           meshes.num_faces_per_mesh().tolist())
+    vertices = vertices[0].cpu().numpy()
+    faces = faces[0].cpu().numpy()
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+    if isinstance(meshes.textures, TexturesUV):
+        texture = meshes.textures.maps_padded()
+        texture = padded_to_list(texture, meshes.num_faces_per_mesh())[0]
+        texture = texture.cpu().numpy()
+        mesh.visual = trimesh.visual.texture.TextureVisuals(
+            uv=texture, image=meshes.textures.atlas)
+    elif isinstance(meshes.textures, TexturesVertex):
+        vertex_colors = meshes.textures.verts_features_padded()
+        vertex_colors = padded_to_list(vertex_colors,
+                                       meshes.num_verts_per_mesh().tolist())[0]
+        vertex_colors = vertex_colors.cpu().numpy()
+        mesh.visual = trimesh.visual.color.ColorVisuals(vertex_colors)
+    return mesh
+
+
+def trimesh_to_t3dmesh(tri_mesh: trimesh.Trimesh) -> Meshes:
+    vertices = torch.tensor(tri_mesh.vertices.astype(float))[None].float()
+    faces = torch.tensor(tri_mesh.faces.astype(int))[None].long()
+    if getattr(tri_mesh.visual, 'material', None) is not None:
+        image = tri_mesh.visual.material.image
+        array = np.array(image)
+        if image.mode == 'LA':
+            l_channel = array[:, :, 0]
+            a_channel = array[:, :, 1]
+            rgb_array = np.stack([l_channel, l_channel, l_channel], axis=2)
+            rgb_array[:, :, 1] += a_channel // 2
+            rgb_array[:, :, 2] += a_channel // 2
+            array = rgb_array
+        texture_image = torch.tensor(array, dtype=torch.float32)
+        array = np.array(image)
+
+        texture_image = texture_image[None, ..., :3] / 255.0
+        verts_uvs = torch.tensor(tri_mesh.visual.uv)[None].float()
+
+        textures = TexturesUV(maps=texture_image,
+                              faces_uvs=faces,
+                              verts_uvs=verts_uvs)
+    elif getattr(tri_mesh.visual, 'vertex_colors', None) is not None:
+        vertex_colors = torch.tensor(
+            tri_mesh.visual.vertex_colors)[None].float()
+        textures = TexturesVertex(verts_features=vertex_colors[..., :3])
+    else:
+        textures = None
+    meshes = Meshes(verts=vertices, faces=faces, textures=textures)
+    return meshes
+

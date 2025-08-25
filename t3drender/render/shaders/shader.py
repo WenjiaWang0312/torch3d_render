@@ -99,6 +99,7 @@ class DepthShader(nn.Module):
             face_attributes=faces_depth)
         return depth_map[..., 0, :]
 
+    
 
 class NormalShader(nn.Module):
     """No light shader."""

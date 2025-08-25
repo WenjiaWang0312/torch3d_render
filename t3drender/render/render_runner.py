@@ -183,15 +183,14 @@ def render_mp(renderer: Union[nn.Module, dict],
     except RuntimeError:
         pass
     device = parse_device(device)
+    num_frames = max(len(meshes), len(cameras), len(lights))
+    if len(meshes) == 1:
+        meshes = meshes.extend(num_frames)
+    if len(cameras) == 1:
+        cameras = cameras.extend(num_frames)
+    if len(lights) == 1:
+        lights = lights.extend(num_frames)
     if len(device) >1:
-        num_frames = max(len(meshes), len(cameras), len(lights))
-        if len(meshes) == 1:
-            meshes = meshes.extend(num_frames)
-        if len(cameras) == 1:
-            cameras = cameras.extend(num_frames)
-        if len(lights) == 1:
-            lights = lights.extend(num_frames)
-
         num_each_gpu = math.ceil(num_frames / len(device))
         slice_indices = [list(range(i * num_each_gpu, min((i + 1) * num_each_gpu, num_frames))) for i in range(len(device))]
         args = [dict(renderer=renderer, meshes=meshes[slice_indices[gpu_id]], device=device[gpu_id], cameras=cameras[slice_indices[gpu_id]], lights=lights[slice_indices[gpu_id]], batch_size=batch_size, no_grad=no_grad, verbose=verbose) for gpu_id in range(len(device))]
@@ -201,6 +200,7 @@ def render_mp(renderer: Union[nn.Module, dict],
         rendered_frames = torch.cat(rendered_frames)
     else:
         rendered_frames = render(renderer=renderer, meshes=meshes, lights=lights, batch_size=batch_size, no_grad=no_grad, verbose=verbose, cameras=cameras, device=device[0])
+        rendered_frames = rendered_frames.cpu()
     return rendered_frames
 
 
