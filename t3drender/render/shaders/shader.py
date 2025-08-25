@@ -172,4 +172,4 @@ class SegmentationShader(nn.Module):
         #     pix_to_face=fragments.pix_to_face,
         #     barycentric_coords=fragments.bary_coords,
         #     face_attributes=faces_class).long()
-        return segmentation_map[..., :, 0]
+        return segmentation_map[..., :, 0].round().long()

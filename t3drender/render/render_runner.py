@@ -183,13 +183,17 @@ def render_mp(renderer: Union[nn.Module, dict],
     except RuntimeError:
         pass
     device = parse_device(device)
-    num_frames = max(len(meshes), len(cameras), len(lights))
+    if lights is not None:
+        num_frames = max(len(meshes), len(cameras), len(lights))
+    else:
+        num_frames = max(len(meshes), len(cameras))
     if len(meshes) == 1:
         meshes = meshes.extend(num_frames)
     if len(cameras) == 1:
         cameras = cameras.extend(num_frames)
-    if len(lights) == 1:
-        lights = lights.extend(num_frames)
+    if lights is not None:
+        if len(lights) == 1:
+            lights = lights.extend(num_frames)
     if len(device) >1:
         num_each_gpu = math.ceil(num_frames / len(device))
         slice_indices = [list(range(i * num_each_gpu, min((i + 1) * num_each_gpu, num_frames))) for i in range(len(device))]
